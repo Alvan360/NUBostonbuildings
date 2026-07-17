@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NU Digital Twin</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Fullscreen map canvas -->
+  <div id="map-container">
+    <div id="map"></div>
+  </div>
+
+  <!-- TOP-LEFT: Cesium ION watermark -->
+  <div id="cesium-watermark">CESIUM ion — Upgrade for commercial use. Data attribution</div>
+
+  <!-- LEFT OVERLAY PANEL -->
+  <div id="left-panel" class="glass-panel">
+    <!-- Search -->
+    <div id="search-wrapper">
+      <span class="search-icon">&#128269;</span>
+      <input type="text" id="search-input" placeholder="Search buildings" />
+    </div>
+
+    <!-- Layer toggles -->
+    <div class="layer-group">
+      <label class="layer-toggle">
+        <span class="toggle-track active" data-layer="streets"><span class="toggle-thumb"></span></span>
+        <span class="layer-icon">&#9733;</span>
+        <span class="layer-label">Street Centerlines</span>
+      </label>
+      <label class="layer-toggle">
+        <span class="toggle-track active" data-layer="footprints"><span class="toggle-thumb"></span></span>
+        <span class="layer-icon">&#9632;</span>
+        <span class="layer-label">Building Footprints</span>
+      </label>
+      <label class="layer-toggle">
+        <span class="toggle-track active" data-layer="greenspaces"><span class="toggle-thumb"></span></span>
+        <span class="layer-icon">&#9733;</span>
+        <span class="layer-label">Green Spaces</span>
+      </label>
+    </div>
+
+    <!-- Collapsible: Building Scale Models -->
+    <div class="collapsible expanded">
+      <div class="collapsible-header">
+        <span class="collapse-arrow">&#9660;</span>
+        <span>Building Scale Models</span>
+      </div>
+      <div class="collapsible-body">
+        <label class="layer-item">
+          <span class="layer-icon">&#9638;</span>
+          <span class="layer-label">BIM</span>
+        </label>
+        <label class="layer-item active-item">
+          <span class="layer-icon">&#9678;</span>
+          <span class="layer-label">Rhino (Building)</span>
+          <span class="active-dot"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Collapsible: Urban Scale Models -->
+    <div class="collapsible">
+      <div class="collapsible-header">
+        <span class="collapse-arrow">&#9660;</span>
+        <span>Urban Scale Models</span>
+      </div>
+      <div class="collapsible-body" style="display:none">
+        <label class="layer-item">
+          <span class="layer-icon">&#9730;</span>
+          <span class="layer-label">OSM Buildings</span>
+        </label>
+        <label class="layer-item">
+          <span class="layer-icon">&#9678;</span>
+          <span class="layer-label">Rhino (Urban)</span>
+        </label>
+        <label class="layer-item">
+          <span class="layer-icon">&#9641;</span>
+          <span class="layer-label">UBEM</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Footer links -->
+    <div id="left-footer">
+      <span class="footer-link"><span class="fi">&#63;</span> Help</span>
+      <span class="footer-link"><span class="fi">&#9881;</span> Settings</span>
+    </div>
+  </div>
+
+  <!-- RIGHT OVERLAY PANEL -->
+  <div id="right-panel" class="glass-panel">
+    <div class="right-section">
+      <div class="right-section-header">Controls</div>
+      <div class="control-list">
+        <span class="control-item active-control" data-control="buildings">
+          <span class="control-icon">&#9962;</span>
+          <span class="control-label">Buildings</span>
+        </span>
+        <span class="control-item" data-control="energy">
+          <span class="control-icon">&#9889;</span>
+          <span class="control-label">Energy</span>
+        </span>
+        <span class="control-item" data-control="thermal">
+          <span class="control-icon">&#9729;</span>
+          <span class="control-label">Thermal Comfort</span>
+        </span>
+        <span class="control-item" data-control="wind">
+          <span class="control-icon">&#9781;</span>
+          <span class="control-label">Wind</span>
+        </span>
+        <span class="control-item" data-control="solar">
+          <span class="control-icon">&#9728;</span>
+          <span class="control-label">Solar</span>
+        </span>
+        <span class="control-item" data-control="distance">
+          <span class="control-icon">&#8596;</span>
+          <span class="control-label">Distance</span>
+        </span>
+      </div>
+    </div>
+    <div class="right-section">
+      <div class="right-section-header">Resources</div>
+      <div class="resource-list">
+        <span class="resource-item">
+          <span class="res-icon">&#128214;</span>
+          <span class="res-label">User Guide</span>
+        </span>
+        <span class="resource-item">
+          <span class="res-icon">&#127909;</span>
+          <span class="res-label">Tutorial Videos</span>
+        </span>
+        <span class="resource-item">
+          <span class="res-icon">&#128273;</span>
+          <span class="res-label">API Reference</span>
+        </span>
+        <span class="resource-item">
+          <span class="res-icon">&#123;</span>
+          <span class="res-label">Developer Guide</span>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Info panel (popup on building click) -->
+  <div id="info-panel" class="hidden">
+    <button id="close-panel">&times;</button>
+    <div id="info-content"></div>
+  </div>
+
+  <!-- BOTTOM: Footer bar -->
+  <div id="bottom-bar">
+    <span id="copyright-text">NU Digital Twin | About | Share | Stats</span>
+  </div>
+
+  <!-- FLOATING BUTTONS -->
+  <!-- Bottom-left: Camera -->
+  <button id="btn-camera" class="float-btn float-btn-bottom-left" title="Screenshot">
+    <span>&#128247;</span>
+  </button>
+
+  <!-- Bottom-right: Layer + Home -->
+  <button id="btn-layers" class="float-btn float-btn-bottom-right float-btn-left" title="Layers">
+    <span>&#9776;</span>
+  </button>
+  <button id="btn-home" class="float-btn float-btn-bottom-right float-btn-right" title="Home">
+    <span>&#8962;</span>
+  </button>
+
+  <!-- Scale indicator -->
+  <div id="scale-indicator">100 m</div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="buildings-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
