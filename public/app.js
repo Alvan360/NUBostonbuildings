@@ -10,7 +10,7 @@ const map = new maplibregl.Map({
   canvasContextAttributes: { antialias: true }
 });
 
-map.addControl(new maplibregl.NavigationControl());
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }));
 map.addControl(new maplibregl.ScaleControl());
 
 // ---- Three.js custom layer (official MapLibre pattern) ----
@@ -73,6 +73,14 @@ map.on('load', () => {
 });
 
 // ---- Extrusion builder ----
+function lightenColor(hex, amount) {
+  hex = hex.replace('#', '');
+  const r = Math.min(255, parseInt(hex.substring(0, 2), 16) + Math.round(255 * amount));
+  const g = Math.min(255, parseInt(hex.substring(2, 4), 16) + Math.round(255 * amount));
+  const b = Math.min(255, parseInt(hex.substring(4, 6), 16) + Math.round(255 * amount));
+  return '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
+}
+
 function buildExtrusion(polyMeters, heightMeters, color, id) {
   const shape = new THREE.Shape();
   polyMeters.forEach((p, i) => {
@@ -95,7 +103,33 @@ function buildExtrusion(polyMeters, heightMeters, color, id) {
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData.buildingId = id;
+
+  const roofGeo = new THREE.ShapeGeometry(shape);
+  roofGeo.translate(0, 0, heightMeters);
+  const roofMat = new THREE.MeshStandardMaterial({
+    color: lightenColor(color || '#cccccc', 0.2),
+    metalness: 0.05,
+    roughness: 0.8,
+    side: THREE.DoubleSide
+  });
+  mesh.add(new THREE.Mesh(roofGeo, roofMat));
+
   return mesh;
+}
+
+function rotatePoint(px, py, angleDeg) {
+  const rad = angleDeg * Math.PI / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  return [px * cos - py * sin, px * sin + py * cos];
+}
+
+function mirrorPoint(px, py, mx, my) {
+  return [mx ? -px : px, my ? -py : py];
+}
+
+function shiftPoint(px, py, sx, sy) {
+  return [px + sx, py + sy];
 }
 
 function buildAll(scene) {
@@ -110,14 +144,24 @@ function buildAll(scene) {
     const coord = maplibregl.MercatorCoordinate.fromLngLat([b.lng, b.lat], 0);
     const meterScale = coord.meterInMercatorCoordinateUnits();
 
-    const polyMeters = b.polygon.map(pt => {
+    let polyMeters = b.polygon.map(pt => {
       const c = maplibregl.MercatorCoordinate.fromLngLat([pt[0], pt[1]], 0);
       return [(c.x - coord.x) / meterScale, (c.y - coord.y) / meterScale];
     });
 
+    if (b.mirrorX || b.mirrorY) {
+      polyMeters = polyMeters.map(p => mirrorPoint(p[0], p[1], b.mirrorX, b.mirrorY));
+    }
+    if (b.shiftX || b.shiftY) {
+      polyMeters = polyMeters.map(p => shiftPoint(p[0], p[1], b.shiftX || 0, b.shiftY || 0));
+    }
+    if (b.rotation) {
+      polyMeters = polyMeters.map(p => rotatePoint(p[0], p[1], b.rotation));
+    }
+
     const mesh = buildExtrusion(polyMeters, b.height, b.color, b.id);
     scene.add(mesh);
-    sceneObjects.push({ id: b.id, mesh, mercCoord: coord, meterScale, transMat: new THREE.Matrix4() });
+    sceneObjects.push({ id: b.id, mesh, mercCoord: coord, meterScale, transMat: new THREE.Matrix4(), polyMeters });
   }
 }
 
@@ -131,34 +175,145 @@ async function loadBuildings(scene) {
   buildAll(scene);
 }
 
+// ---- Compass overlay markers ----
+let compassMarkers = [];
+
+function getEdgeMidpoints(polyPoints) {
+  const midpoints = [];
+  for (let i = 0; i < polyPoints.length - 1; i++) {
+    const a = polyPoints[i];
+    const b = polyPoints[i + 1];
+    midpoints.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+  }
+  return midpoints;
+}
+
+function edgeBearing(a, b) {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  let deg = Math.atan2(dx, dy) * 180 / Math.PI;
+  if (deg < 0) deg += 360;
+  return deg;
+}
+
+function bearingLabel(deg) {
+  const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+  return dirs[Math.round(deg / 45) % 8];
+}
+
+function showCompassOverlay(b) {
+  clearCompassOverlay();
+  const obj = sceneObjects.find(o => o.id === b.id);
+  if (!obj || !obj.polyMeters) return;
+
+  const midpoints = getEdgeMidpoints(obj.polyMeters);
+  const directions = ['N','E','S','W','NE','SE','SW','NW'];
+
+  midpoints.forEach((mp, i) => {
+    const nextPt = obj.polyMeters[(i + 1) % (obj.polyMeters.length - 1)];
+    const bearing = edgeBearing(mp, nextPt);
+    const label = bearingLabel(bearing);
+
+    const lngLat = meterToLngLat(mp, obj);
+
+    const el = document.createElement('div');
+    el.style.cssText = 'background:rgba(255,255,255,0.9);color:#222;font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;white-space:nowrap;pointer-events:none;text-align:center;min-width:20px;';
+    el.textContent = label;
+
+    const marker = new maplibregl.Marker({ element: el })
+      .setLngLat(lngLat)
+      .addTo(map);
+    marker.getElement().style.pointerEvents = 'none';
+    compassMarkers.push(marker);
+  });
+}
+
+function meterToLngLat(meterPt, obj) {
+  const mercX = obj.mercCoord.x + meterPt[0] * obj.meterScale;
+  const mercY = obj.mercCoord.y + meterPt[1] * obj.meterScale;
+  const coord = new maplibregl.MercatorCoordinate(mercX, mercY, 0);
+  const ll = coord.toLngLat();
+  return [ll.lng, ll.lat];
+}
+
+function clearCompassOverlay() {
+  compassMarkers.forEach(m => m.remove());
+  compassMarkers = [];
+}
+
+// ---- Rebuild a single building ----
+function rebuildSingleBuilding(buildingId) {
+  const b = buildings.find(x => x.id === buildingId);
+  if (!b) return;
+  const obj = sceneObjects.find(o => o.id === buildingId);
+  if (!obj) return;
+
+  const coord = maplibregl.MercatorCoordinate.fromLngLat([b.lng, b.lat], 0);
+  const meterScale = coord.meterInMercatorCoordinateUnits();
+
+  let polyMeters = b.polygon.map(pt => {
+    const c = maplibregl.MercatorCoordinate.fromLngLat([pt[0], pt[1]], 0);
+    return [(c.x - coord.x) / meterScale, (c.y - coord.y) / meterScale];
+  });
+
+  if (b.mirrorX || b.mirrorY) {
+    polyMeters = polyMeters.map(p => mirrorPoint(p[0], p[1], b.mirrorX, b.mirrorY));
+  }
+  if (b.shiftX || b.shiftY) {
+    polyMeters = polyMeters.map(p => shiftPoint(p[0], p[1], b.shiftX || 0, b.shiftY || 0));
+  }
+  if (b.rotation) {
+    polyMeters = polyMeters.map(p => rotatePoint(p[0], p[1], b.rotation));
+  }
+
+  const scene = customLayer.scene;
+  scene.remove(obj.mesh);
+  obj.mesh.geometry.dispose();
+  obj.mesh.material.dispose();
+
+  const mesh = buildExtrusion(polyMeters, b.height, b.color, b.id);
+  scene.add(mesh);
+  obj.mesh = mesh;
+  obj.polyMeters = polyMeters;
+}
+
+// ---- Point-in-polygon (ray-casting) ----
+function pointInPolygon(point, polygon) {
+  const [px, py] = point;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i];
+    const [xj, yj] = polygon[j];
+    if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 // ---- Click ----
 let popup = null;
+let selectedBuildingId = null;
 map.on('click', (e) => {
   if (popup) { popup.remove(); popup = null; }
-  if (!sceneObjects.length) return;
-  const rect = map.getCanvas().getBoundingClientRect();
-  const ndcX = (e.point.x / rect.width) * 2 - 1;
-  const ndcY = -(e.point.y / rect.height) * 2 + 1;
+  selectedBuildingId = null;
 
-  const cam = customLayer.camera;
-  const raycaster = new THREE.Raycaster();
-  raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), cam);
+  const ll = map.unproject(e.point);
+  let hit = null;
+  for (const b of buildings) {
+    if (!b.polygon) continue;
+    if (pointInPolygon([ll.lng, ll.lat], b.polygon)) { hit = b; break; }
+  }
 
-  const meshes = sceneObjects.map(o => o.mesh);
-  const hits = raycaster.intersectObjects(meshes, true);
-  if (hits.length) {
-    let o = hits[0].object;
-    while (o && o.userData.buildingId === undefined) o = o.parent;
-    if (o && o.userData.buildingId !== undefined) {
-      const b = buildings.find(x => x.id === o.userData.buildingId);
-      if (b) {
-        showBuildingInfo(b);
-        popup = new maplibregl.Popup({ offset: 25 })
-          .setLngLat([b.lng, b.lat])
-          .setHTML(`<b>${esc(b.name)}</b><br>${b.height}m tall`)
-          .addTo(map);
-      }
-    }
+  if (hit) {
+    selectedBuildingId = hit.id;
+    showBuildingInfo(hit);
+    popup = new maplibregl.Popup({ offset: 25 })
+      .setLngLat([hit.lng, hit.lat])
+      .setHTML(`<b>${esc(hit.name)}</b><br>${hit.height}m tall`)
+      .addTo(map);
+  } else {
+    document.getElementById('info-panel').classList.add('hidden');
   }
 });
 
@@ -168,12 +323,14 @@ function showBuildingInfo(b) {
     ${b.image_file ? `<img class="info-img" src="/uploads/${b.image_file}" />` : ''}
     <h2>${esc(b.name)}</h2>
     <p>${esc(b.description || '')}</p>
-    <p>${b.lat}, ${b.lng} | ${b.height}m</p>`;
+    <p>${b.lat.toFixed(6)}, ${b.lng.toFixed(6)} | ${b.height}m</p>`;
   document.getElementById('info-panel').classList.remove('hidden');
 }
 
-document.getElementById('close-panel').onclick = () =>
+document.getElementById('close-panel').onclick = () => {
   document.getElementById('info-panel').classList.add('hidden');
+  selectedBuildingId = null;
+};
 
 function toast(msg, err) {
   let t = document.getElementById('t');
@@ -200,4 +357,63 @@ document.getElementById('btn-camera').onclick = () =>
 document.querySelectorAll('.toggle-track').forEach(t =>
   t.onclick = e => { e.stopPropagation(); t.classList.toggle('active'); }
 );
+
+
+
+// ---- Compass bar ----
+const compassTrack = document.getElementById('compass-track');
+const directions = [
+  { deg: 0, label: 'N', cardinal: true },
+  { deg: 45, label: 'NE', cardinal: false },
+  { deg: 90, label: 'E', cardinal: true },
+  { deg: 135, label: 'SE', cardinal: false },
+  { deg: 180, label: 'S', cardinal: true },
+  { deg: 225, label: 'SW', cardinal: false },
+  { deg: 270, label: 'W', cardinal: true },
+  { deg: 315, label: 'NW', cardinal: false },
+];
+const pxPerDeg = 2400 / 360;
+const copyWidth = 2400;
+const totalCopies = 3;
+const totalWidth = copyWidth * totalCopies;
+
+// Build 3 copies of the track so it wraps smoothly
+for (let copy = 0; copy < totalCopies; copy++) {
+  const offsetX = copy * copyWidth;
+  for (let deg = 0; deg < 360; deg += 5) {
+    const tick = document.createElement('div');
+    tick.className = 'compass-tick ' + (deg % 45 === 0 ? 'major' : 'minor');
+    tick.style.left = (offsetX + deg * pxPerDeg) + 'px';
+    compassTrack.appendChild(tick);
+  }
+  directions.forEach(d => {
+    const label = document.createElement('div');
+    label.className = 'compass-label' + (d.cardinal ? ' cardinal' : '');
+    label.style.left = (offsetX + d.deg * pxPerDeg) + 'px';
+    label.textContent = d.label;
+    compassTrack.appendChild(label);
+  });
+}
+
+compassTrack.style.width = totalWidth + 'px';
+
+let lastBearing = null;
+let continuousOffset = 0;
+
+function updateCompass() {
+  const bearing = map.getBearing();
+  if (lastBearing !== null) {
+    let delta = bearing - lastBearing;
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+    continuousOffset += delta;
+  }
+  lastBearing = bearing;
+
+  const pos = continuousOffset * pxPerDeg;
+  const offset = 300 - copyWidth - pos;
+  compassTrack.style.transform = `translateX(${offset}px)`;
+}
+map.on('rotate', updateCompass);
+updateCompass();
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
