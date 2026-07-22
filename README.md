@@ -6,10 +6,12 @@ A 3D interactive digital twin of Northeastern University's campus. Explore build
 
 ## Features
 
-- 3D building extrusions rendered with Three.js on a MapLibre GL map
+- 68 building extrusions with polygon footprints from OpenStreetMap
+- Flat roofs with lighter-shade cap on each building
+- 3D rendering with Three.js on a MapLibre GL map
 - Searchable building list
 - Layer toggles (Street Centerlines, Building Footprints, Green Spaces)
-- Collapsible model sections (Building Scale, Urban Scale)
+- Compass bar showing current bearing
 - Click-to-inspect building info panel with images
 - Screenshot capture
 - Home reset view
@@ -98,7 +100,8 @@ gis-3d-map/
 ├── public/
 │   ├── index.html             # Main HTML page
 │   ├── app.js                 # Map, Three.js layer, UI logic
-│   ├── buildings-data.js      # Static building polygon data (5 NU buildings)
+│   ├── buildings-data.js      # 68 campus buildings with polygon footprints
+│   ├── building-transforms-archive.js  # Archived transform UI code (rotation/mirror/shift)
 │   ├── style.css              # Glassmorphic dark-theme styles
 │   ├── models/                # Uploaded 3D model files (.glb)
 │   └── uploads/               # Uploaded images
@@ -112,7 +115,9 @@ gis-3d-map/
 
 ## Static Building Data
 
-Five Northeastern University buildings are hardcoded in `buildings-data.js` with polygon footprints for 3D extrusion:
+68 Northeastern University buildings are hardcoded in `buildings-data.js` with real polygon footprints sourced from OpenStreetMap. Each entry includes `rotation`, `mirrorX`, `mirrorY`, `shiftX`, and `shiftY` transform values used to align the extrusion with the basemap.
+
+### Original buildings (IDs 200–247)
 
 | Building | Height |
 |----------|--------|
@@ -121,8 +126,30 @@ Five Northeastern University buildings are hardcoded in `buildings-data.js` with
 | Snell Library | 20 m |
 | Egan Engineering/Science | 28 m |
 | Mugar Life Sciences | 28 m |
+| ...and 43 more |
 
-These are always loaded on page load. Additional buildings can be added via the API.
+### Additional campus buildings (IDs 300–319)
+
+| Building | Height |
+|----------|--------|
+| Building 300 (tall) | 102 m |
+| Reynolds Hall | 18 m |
+| Light Hall | 18 m |
+| Levine Hall | 18 m |
+| Burstein Hall | 3.5 m |
+| Fenway Center | 18 m |
+| Renaissance Park | 31.5 m |
+| Renaissance Parking Garage | 35 m |
+| Lightview | 73.5 m |
+| Church Park Luxury Apartments | 38.5 m |
+| Center for Engineering, Innovation and Sciences | 18 m |
+| Watson / Dobbs / Wentworth Hall | 18 m each |
+| Symphony Plaza East | 44 m |
+| 407 Huntington Avenue | 17.5 m |
+| Davenport Commons A/B | 18 m each |
+| Northampton Street Residences | 18 m |
+
+Additional buildings can be added via the API.
 
 ## Deployment
 
@@ -130,7 +157,8 @@ The project includes a `render.yaml` for one-click deployment on Render.
 
 1. Connect your GitHub repo to Render as a **Web Service**
 2. Render auto-detects `render.yaml` and configures the build
-3. The service is available at `nubostonbuildings.onrender.com`
+3. Add custom domain `www.nu-digital-twin.com` in Render dashboard
+4. Set DNS: 2 CNAME records (`www` → `nu-digital-twin.onrender.com`), plus an A record for `@` from Render's IP
 
 > **Note:** Render's free tier uses an ephemeral filesystem. The SQLite database resets on each deploy. Static building data from `buildings-data.js` is always available since it's served from the repo.
 
