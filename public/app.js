@@ -62,6 +62,17 @@ const customLayer = {
       obj.mesh.matrixWorldNeedsUpdate = false;
     }
 
+    for (const obj of rhinoObjects) {
+      const c = obj.mercCoord;
+      const s = obj.meterScale;
+      obj.transMat.identity().makeTranslation(c.x, c.y, 0);
+      obj.transMat.scale(new THREE.Vector3(s, -s, s));
+      obj.transMat.multiply(obj.localMat);
+      obj.group.matrix.copy(obj.transMat);
+      obj.group.matrixAutoUpdate = false;
+      obj.group.matrixWorldNeedsUpdate = false;
+    }
+
     this.renderer.resetState();
     this.renderer.render(this.scene, this.camera);
     this.map.triggerRepaint();
@@ -173,6 +184,60 @@ async function loadBuildings(scene) {
     if (!buildings.find(x => x.id === a.id)) buildings.push(a);
   }
   buildAll(scene);
+}
+
+// ---- Rhino (GLB) models ----
+const rhinoObjects = [];
+const gltfLoader = new THREE.GLTFLoader();
+
+async function loadRhinoModels(scene) {
+  if (rhinoObjects.length) return;
+  const withModels = buildings.filter(b => b.model_file);
+  for (const b of withModels) {
+    try {
+      const gltf = await new Promise((resolve, reject) => {
+        gltfLoader.load(`/models/${b.model_file}`, resolve, undefined, reject);
+      });
+      const group = gltf.scene;
+
+      // Fix black materials
+      group.traverse(child => {
+        if (child.isMesh) {
+          child.material = new THREE.MeshStandardMaterial({
+            color: 0xbbbbbb,
+            metalness: 0.1,
+            roughness: 0.7,
+            side: THREE.DoubleSide
+          });
+        }
+      });
+
+      // Fix Z orientation: compute bounding box
+      const box = new THREE.Box3().setFromObject(group);
+
+      // Compute local matrix: Z offset + rotation + mirror
+      const localMat = new THREE.Matrix4();
+      const zLift = new THREE.Matrix4().makeTranslation(0, 0, -box.min.z);
+      const rotMat = new THREE.Matrix4().makeRotationZ((b.rotation || 0) * Math.PI / 180);
+      const mirrorMat = new THREE.Matrix4().makeScale(b.mirrorX ? -1 : 1, b.mirrorY ? -1 : 1, 1);
+      localMat.multiply(zLift).multiply(rotMat).multiply(mirrorMat);
+
+      console.log('Rhino model loaded:', b.name, 'bbox:', box.min.toArray(), box.max.toArray());
+
+      const coord = maplibregl.MercatorCoordinate.fromLngLat([b.lng, b.lat], 0);
+      const meterScale = coord.meterInMercatorCoordinateUnits();
+      rhinoObjects.push({ id: b.id, group, localMat, mercCoord: coord, meterScale, transMat: new THREE.Matrix4() });
+      scene.add(group);
+    } catch (err) {
+      console.warn('Failed to load GLB:', b.model_file, err);
+    }
+  }
+}
+
+function setRhinoVisibility(visible) {
+  for (const obj of rhinoObjects) {
+    obj.group.visible = visible;
+  }
 }
 
 // ---- Compass overlay markers ----
@@ -345,18 +410,92 @@ document.querySelectorAll('.collapsible-header').forEach(h =>
     b.style.display = b.style.display === 'none' ? 'flex' : 'none';
     h.parentElement.classList.toggle('expanded'); }
 );
-document.querySelectorAll('.control-item').forEach(c =>
-  c.onclick = () => {
-    document.querySelectorAll('.control-item').forEach(x => x.classList.remove('active-control'));
-    c.classList.add('active-control'); }
-);
 document.getElementById('btn-home').onclick = () =>
   map.flyTo({ center: [-71.0875, 42.3403], zoom: 16, pitch: 55, bearing: -30, duration: 1200 });
 document.getElementById('btn-camera').onclick = () =>
   map.getCanvas().toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'twin.png'; a.click(); });
-document.querySelectorAll('.toggle-track').forEach(t =>
-  t.onclick = e => { e.stopPropagation(); t.classList.toggle('active'); }
-);
+// ---- Layer switching ----
+let activeLayer = 'OSM Buildings';
+
+function setOSMVisibility(visible) {
+  map.setLayoutProperty('three-buildings', 'visibility', visible ? 'visible' : 'none');
+}
+
+document.querySelectorAll('.layer-item').forEach(item => {
+  item.onclick = () => {
+    const label = item.querySelector('.layer-label').textContent.trim();
+
+    // Deselect all items across both groups
+    document.querySelectorAll('.layer-item').forEach(i => {
+      i.classList.remove('active-item');
+      const dot = i.querySelector('.active-dot');
+      if (dot) dot.remove();
+    });
+
+    // Activate clicked item
+    item.classList.add('active-item');
+    const dot = document.createElement('span');
+    dot.className = 'active-dot';
+    item.appendChild(dot);
+
+    activeLayer = label;
+    setOSMVisibility(label === 'OSM Buildings');
+
+    if (label === 'Rhino (Building)') {
+      loadRhinoModels(customLayer.scene).then(() => setRhinoVisibility(true));
+    } else {
+      setRhinoVisibility(false);
+    }
+  };
+});
+
+// ---- Search ----
+const searchPopup = document.createElement('div');
+searchPopup.id = 'search-popup';
+document.getElementById('search-wrapper').appendChild(searchPopup);
+
+const searchInput = document.getElementById('search-input');
+let searchBlurTimeout = null;
+
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim().toLowerCase();
+  if (!q) { searchPopup.style.display = 'none'; return; }
+
+  const results = buildings.filter(b => b.name.toLowerCase().includes(q)).slice(0, 10);
+
+  searchPopup.innerHTML = '';
+  if (!results.length) {
+    searchPopup.innerHTML = '<div class="search-no-results">No results</div>';
+  } else {
+    results.forEach(b => {
+      const item = document.createElement('div');
+      item.className = 'search-result-item';
+      item.textContent = `${b.name}  (${b.height}m)`;
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        searchPopup.style.display = 'none';
+        searchInput.value = '';
+        map.flyTo({ center: [b.lng, b.lat], zoom: 17, duration: 1200 });
+        showBuildingInfo(b);
+        if (popup) popup.remove();
+        popup = new maplibregl.Popup({ offset: 25 })
+          .setLngLat([b.lng, b.lat])
+          .setHTML(`<b>${esc(b.name)}</b><br>${b.height}m tall`)
+          .addTo(map);
+      });
+      searchPopup.appendChild(item);
+    });
+  }
+  searchPopup.style.display = 'block';
+});
+
+searchInput.addEventListener('blur', () => {
+  searchBlurTimeout = setTimeout(() => { searchPopup.style.display = 'none'; }, 200);
+});
+searchInput.addEventListener('focus', () => {
+  if (searchBlurTimeout) clearTimeout(searchBlurTimeout);
+  if (searchInput.value.trim()) searchInput.dispatchEvent(new Event('input'));
+});
 
 
 

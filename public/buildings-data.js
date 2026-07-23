@@ -956,6 +956,7 @@ const BUILDINGS_DATA = [
     "lng": -71.08894206,
     "height": 18,
     "color": "#cccccc",
+    "model_file": "churchill-hall.glb",
     "rotation": 180,
     "mirrorX": 1,
     "mirrorY": 0,
