@@ -204,7 +204,7 @@ async function loadRhinoModels(scene) {
       group.traverse(child => {
         if (child.isMesh) {
           child.material = new THREE.MeshStandardMaterial({
-            color: 0xbbbbbb,
+            color: 0xff0000,
             metalness: 0.1,
             roughness: 0.7,
             side: THREE.DoubleSide
